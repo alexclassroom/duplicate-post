@@ -1,0 +1,229 @@
+name: Deploy
+
+on:
+  # Trigger the workflow on select pushes.
+  push:
+    branches:
+      - master
+      - trunk
+      - 'release/**'
+      - 'hotfix/[0-9]+.[0-9]+*'
+      - 'feature/**'
+  # Trigger the workflow whenever a new release is created.
+  release:
+    types:
+      - published
+  # Allow manually triggering the workflow.
+  workflow_dispatch:
+
+# Cancels all previous workflow runs for the same branch that have not yet completed.
+concurrency:
+  # The concurrency group contains the workflow name and the branch name.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DIST_ORG: Yoast-dist
+  DIST_DEFAULT_BRANCH: master
+  DIST_DEV_BRANCH: trunk
+
+jobs:
+  prepare:
+    name: "Prepare the artifact"
+    # Don't run on forks.
+    if: github.repository_owner == 'Yoast'
+
+    runs-on: ubuntu-latest
+
+    steps:
+# TEMP TO REMOVE
+      - name: Dump GitHub environment
+        env:
+          GITHUB_JOB_ENV: ${{ toJSON(env) }}
+        run: echo "$GITHUB_JOB_ENV"
+
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJSON(github) }}
+        run: echo "$GITHUB_CONTEXT"
+# END TEMP TO REMOVE
+
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      # The ubuntu images come with PHP, Node, npm and yarn pre-installed.
+      # For Ubuntu 20, this means Node 14 will be used and PHP 8.0.
+      # https://github.com/actions/virtual-environments/blob/main/images/linux/Ubuntu2004-README.md
+
+      # Using this action to handle the caching of the Yarn dependencies.
+      # https://github.com/actions/setup-node
+      - name: Set up node to cache dependencies
+        uses: actions/setup-node@v2
+        with:
+          cache: 'yarn'
+
+      - name: Yarn install
+        run: yarn install
+
+      - name: "Debug info: show tooling versions"
+        run: |
+          npm --version
+          node --version
+          yarn --version
+          grunt --version
+          php -v
+          git --version
+
+      - name: "Grunt: set package version (releases only)"
+        if: ${{ github.event_name == 'release' }}
+        run: grunt set-version -new-version=${{ github.event.release.tag_name }}
+
+      - name: "Grunt: update package version (releases only)"
+        if: ${{ github.event_name == 'release' }}
+        run: grunt update-version
+
+# Looks like this runs a composer install x2 (first: no-dev, then dev)
+# - do we want to control the PHP version ?
+# - do we want to maybe do this ahead of time to allow for caching the downloads ?
+#   The installs will still run here, just won't need to download again.
+      - name: "Grunt: create artifact"
+        run: grunt artifact
+
+      - name: "Debug info: show contents of artifacts directory"
+        run: tree -aC ./artifact
+
+      - name: "Debug info: check git status"
+        run: git status -b -v -u
+
+      # Retention is normally 90 days, but this artifact is only for review
+      # and use in the next step, so no need to keep it for more than a day.
+      - name: Upload the artifact folder
+        uses: actions/upload-artifact@v2
+        if: ${{ success() }}
+        with:
+          name: deploy-artifact
+          path: ./artifact
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy:
+    name: "Deploy to dist"
+    # Don't run on forks.
+    if: github.repository_owner == 'Yoast'
+    needs: prepare
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "Set variables: base branch to check out, target branch"
+        id: set_vars
+        run: |
+          if [[ "${{ github.event_name }}" != 'release' && "${{ github.ref_name }}" != "${{ env.DIST_DEFAULT_BRANCH }}" ]]; then
+            echo '::set-output name=BRANCH::${{ github.ref_name }}'
+          else
+            echo '::set-output name=BRANCH::${{ env.DIST_DEFAULT_BRANCH }}'
+          fi
+
+      - name: Checkout Yoast Dist repo
+        uses: actions/checkout@v2
+        with:
+          repository: ${{ env.DIST_ORG }}/${{ github.event.repository.name }}
+          ref: ${{ env.DIST_DEFAULT_BRANCH }}
+          # Personal Access Token for (push) access to the dist version of the repo.
+          token: ${{ secrets.YOASTBOT_CI_PAT_DIST }}
+
+      - name: "Create branch/Switch to branch"
+        if: ${{ steps.set_vars.outputs.BRANCH != env.DIST_DEFAULT_BRANCH }}
+        run: git checkout ${{ steps.set_vars.outputs.BRANCH }} 2>/dev/null || git checkout -b ${{ steps.set_vars.outputs.BRANCH }}
+
+      # Clean out all files to make sure that deleted files will actually
+      # be deleted when the artifact gets put in place.
+      - name: Remove all files
+        run: |
+          # Enable extended pattern matching.
+          shopt -s extglob
+          # Remove everything, except the ".git" directory and the `composer.json` file.
+          rm -vrf !(.git/*|composer.json)
+          # Disable extended pattern matching.
+          shopt -u extglob
+
+      # After the previous step, only the `.git` directory and its contents should remain.
+      - name: "Debug info: show contents of root directory after cleaning"
+        run: tree -aC .
+
+      # The artifact will be unpacked into the root directory of the repository.
+      - name: Download and unpack the prepared artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: deploy-artifact
+
+      # Remove the vendor directory from the artifact, composer will generate it's own autoload.
+      - name: Remove generated vendor directory
+        run: rm -vrf ./vendor
+
+      - name: "Debug info: show contents of root directory after artifact insertion"
+        run: tree -aC .
+
+      - name: "Debug info: check git status"
+        run: git status -b -v -u
+
+      - name: Determine commit message and options
+        id: commit_info
+        run: |
+          if [[ "${{ github.event_name }}" != 'release' ]]; then
+            echo '::set-output name=MSG::"${{ github.event.head_commit.message }}"'
+            echo '::set-output name=OPTIONS::--allow-empty'
+          else
+            echo '::set-output name=MSG::Release ${{ github.event.release.tag_name }}'
+            echo '::set-output name=OPTIONS::'
+          fi
+
+      - name: Commit the files
+        run: |
+          git config user.name 'GitHub Action'
+          git config user.email '${{ github.actor }}@users.noreply.github.com'
+          git add -A
+          git commit ${{ steps.commit_info.outputs.OPTIONS }} -m ${{ steps.commit_info.outputs.MSG }}
+
+      - name: "Tag the commit (releases only)"
+        if: ${{ github.event_name == 'release' }}
+        run: git tag ${{ github.event.release.tag_name }} $(git rev-parse HEAD)
+
+      - name: Push to target branch
+        run: git push -u origin ${{ steps.set_vars.outputs.BRANCH }} --tags -v
+
+## ===== OLD ====
+#      - name: Run Deploy script
+#        run: config/travis/deploy_to_dist.sh $GITHUB_REF ${{ github.repository.name }}
+#        env:
+#          GH_COMMIT_MSG: ${{ github.event.head_commit.message }}
+
+#=============================
+# FROM TRAVIS:
+#
+#  include:
+#    - stage: 🚀 deployment
+#      name: "Deploy to Yoast-dist"
+#      php: 7.2
+#      before_install:
+#        - openssl aes-256-cbc -K $encrypted_d1beccaa5494_key -iv $encrypted_d1beccaa5494_iv -in config/travis/deploy_keys/id_rsa_yoast_dist.enc -out config/travis/deploy_keys/id_rsa_yoast_dist -d
+#        - chmod 600 config/travis/deploy_keys/id_rsa_yoast_dist
+#        - eval $(ssh-agent -s)
+#        - ssh-add config/travis/deploy_keys/id_rsa_yoast_dist
+#      script:
+#        - |
+#          if [[ ! -z "$TRAVIS_TAG" ]]; then
+#            grunt set-version -new-version=$TRAVIS_TAG
+#            grunt update-version
+#          fi
+#        - grunt artifact
+
+      # If the commit was tagged, create an artifact and push it to the distribution github
+#      deploy:
+#        skip_cleanup: true
+#        provider: script
+#        script: bash config/travis/deploy_to_dist.sh ${TRAVIS_TAG:-$TRAVIS_BRANCH} duplicate-post
+#        on:
+#          repo: $TRAVIS_REPO_SLUG
+#          all_branches: true
+

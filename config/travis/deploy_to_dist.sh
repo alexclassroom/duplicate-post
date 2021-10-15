@@ -55,7 +55,11 @@ git add -A
 
 # If it's a feature, release or trunk branch.
 if [[ $lastTag =~ ^feature/* || $lastTag =~ ^release/* || $lastTag =~ ^hotfix/* || $lastTag == "develop" || $lastTag == "trunk" ]]; then
-  git commit --allow-empty -m "${TRAVIS_COMMIT_MESSAGE}"
+  if [[ $TRAVIS == true ]]; then
+    git commit --allow-empty -m "${TRAVIS_COMMIT_MESSAGE}"
+  else
+    git commit --allow-empty -m "${GH_COMMIT_MSG}"
+  fi
 else
   git commit -m "Release ${lastTag}"
    # Tag the commit.
