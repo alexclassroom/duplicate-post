@@ -3,12 +3,12 @@ name: Deploy
 on:
   # Trigger the workflow on select pushes.
   push:
-    branches:
-      - master
-      - trunk
-      - 'release/**'
-      - 'hotfix/[0-9]+.[0-9]+*'
-      - 'feature/**'
+#    branches:
+#      - master
+#      - trunk
+#      - 'release/**'
+#      - 'hotfix/[0-9]+.[0-9]+*'
+#      - 'feature/**'
   # Trigger the workflow whenever a new release is created.
   release:
     types:

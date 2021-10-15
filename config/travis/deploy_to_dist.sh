@@ -51,9 +51,11 @@ rm -rf ./artifact/vendor
 cd ./artifact
 
 # Commit the files.
+git status
 git add -A
 
 # If it's a feature, release or trunk branch.
+git status
 if [[ $lastTag =~ ^feature/* || $lastTag =~ ^release/* || $lastTag =~ ^hotfix/* || $lastTag == "develop" || $lastTag == "trunk" ]]; then
   if [[ $TRAVIS == true ]]; then
     git commit --allow-empty -m "${TRAVIS_COMMIT_MESSAGE}"
@@ -67,4 +69,5 @@ else
 fi
 
 # Push to remote.
-git push -u origin $branch --tags
+#git push -u origin $branch --tags
+git status
