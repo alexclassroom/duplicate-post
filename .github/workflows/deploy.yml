@@ -175,16 +175,10 @@ jobs:
         id: commit_info
         run: |
           if [[ "${{ github.event_name }}" != 'release' ]]; then
-            msg = ${{ github.event.head_commit.message }}
-            msg = "${msg//'%'/%25}"
-            msg = "${msg//$'\n'/%0A}"
-            msg = "${msg//$'\r'/%0D}"
-            msg = $(echo ${msg} | sed 's/\"/%22/')
-            msg = $(echo ${msg} | sed "s/'/%27/")
-            echo '::set-output name=MSG::$msg'
+            echo '::set-output name=MSG::${{ toJson( github.event.head_commit.message ) }}'
             echo '::set-output name=OPTIONS::--allow-empty'
           else
-            echo '::set-output name=MSG::Release ${{ github.event.release.tag_name }}'
+            echo '::set-output name=MSG::${{ toJson( Release github.event.release.tag_name ) }}'
             echo '::set-output name=OPTIONS::'
           fi
 
@@ -193,7 +187,7 @@ jobs:
           git config user.name 'GitHub Action'
           git config user.email '${{ github.actor }}@users.noreply.github.com'
           git add -A
-          git commit ${{ steps.commit_info.outputs.OPTIONS }} -m ${{ steps.commit_info.outputs.MSG }}
+          git commit ${{ steps.commit_info.outputs.OPTIONS }} -m ${{ fromJson( steps.commit_info.outputs.MSG ) }}
 
       - name: "Tag the commit (releases only)"
         if: ${{ github.event_name == 'release' }}
