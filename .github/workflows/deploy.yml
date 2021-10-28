@@ -167,27 +167,22 @@ jobs:
       - name: "Debug info: check git status"
         run: git status -b -v -u
 
-      # When re-using the commit message from an existing commit, a number of special
-      # characters need to be converted to escape codes as `set-output` does not handle
-      # those correctly. When the variable is expanded again, they should be automagically
-      # converted back again.
-      - name: Determine commit message and options
-        id: commit_info
-        run: |
-          if [[ "${{ github.event_name }}" != 'release' ]]; then
-            echo '::set-output name=MSG::${{ toJson( github.event.head_commit.message ) }}'
-            echo '::set-output name=OPTIONS::--allow-empty'
-          else
-            echo '::set-output name=MSG::${{ toJson( Release github.event.release.tag_name ) }}'
-            echo '::set-output name=OPTIONS::'
-          fi
-
-      - name: Commit the files
+      - name: Set Git config
         run: |
           git config user.name 'GitHub Action'
           git config user.email '${{ github.actor }}@users.noreply.github.com'
+
+      - name: Commit the files (branch)
+        if: ${{ github.event_name != 'release' }}
+        run: |
           git add -A
-          git commit ${{ steps.commit_info.outputs.OPTIONS }} -m ${{ fromJson( steps.commit_info.outputs.MSG ) }}
+          git commit --allow-empty -m "${{ github.event.head_commit.message }}"
+
+      - name: Commit the files (release)
+        if: ${{ github.event_name == 'release' }}
+        run: |
+          git add -A
+          git commit -m "Release ${{ github.event.release.tag_name }}"
 
       - name: "Tag the commit (releases only)"
         if: ${{ github.event_name == 'release' }}
