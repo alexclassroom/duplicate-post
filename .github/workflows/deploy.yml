@@ -167,11 +167,21 @@ jobs:
       - name: "Debug info: check git status"
         run: git status -b -v -u
 
+      # When re-using the commit message from an existing commit, a number of special
+      # characters need to be converted to escape codes as `set-output` does not handle
+      # those correctly. When the variable is expanded again, they should be automagically
+      # converted back again.
       - name: Determine commit message and options
         id: commit_info
         run: |
           if [[ "${{ github.event_name }}" != 'release' ]]; then
-            echo '::set-output name=MSG::"${{ github.event.head_commit.message }}"'
+            msg = ${{ github.event.head_commit.message }}
+            msg = "${msg//'%'/%25}"
+            msg = "${msg//$'\n'/%0A}"
+            msg = "${msg//$'\r'/%0D}"
+            msg = $(echo ${msg} | sed 's/\"/%22/')
+            msg = $(echo ${msg} | sed "s/'/%27/")
+            echo '::set-output name=MSG::$msg'
             echo '::set-output name=OPTIONS::--allow-empty'
           else
             echo '::set-output name=MSG::Release ${{ github.event.release.tag_name }}'
